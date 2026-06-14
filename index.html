@@ -229,7 +229,6 @@
                         trackReceived = true;
                         clearTimeout_();
                         video.srcObject = event.streams[0];
-                        video.muted = false;
                         hideSpinner();
                         video.play().catch(function () {});
                     };
@@ -294,8 +293,13 @@
                         });
                 }
 
-                /* ---------- fullscreen toggle ---------- */
+                /* ---------- fullscreen toggle + unmute ---------- */
+                var unmuted = false;
                 function toggleFullscreen() {
+                    if (!unmuted) {
+                        unmuted = true;
+                        video.muted = false;
+                    }
                     var el = document.getElementById("container");
                     if (document.fullscreenElement) {
                         document.exitFullscreen();
