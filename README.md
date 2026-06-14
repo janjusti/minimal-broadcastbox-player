@@ -8,12 +8,6 @@ Minimal WebRTC player for watching [Broadcast Box](https://github.com/glimesh/br
 https://janjusti.github.io/minimal-broadcastbox-player/?stream_key=my-key
 ```
 
-Or directly in the path:
-
-```
-https://janjusti.github.io/minimal-broadcastbox-player/my-key
-```
-
 Tap/click the video to go fullscreen. Automatically retries up to 3 times on failure.
 
 ## Setup
