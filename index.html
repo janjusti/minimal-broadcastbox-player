@@ -1,0 +1,316 @@
+<!--
+  Broadcast Box Player — minimal TV-friendly watcher.
+  Auto-connects on load. Tap/click the video to go fullscreen.
+-->
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>broadcastbox</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            html,
+            body {
+                width: 100%;
+                height: 100%;
+                background: #000;
+                overflow: hidden;
+                font-family: system-ui, sans-serif;
+            }
+            #container {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 100%;
+                height: 100%;
+                position: relative;
+            }
+            video {
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+                cursor: pointer;
+            }
+            #state {
+                position: absolute;
+                bottom: 16px;
+                left: 50%;
+                transform: translateX(-50%);
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 14px;
+                pointer-events: none;
+                transition: opacity 0.6s;
+            }
+            #spinner {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 24px;
+                transition: opacity 0.4s;
+                cursor: pointer;
+                pointer-events: auto;
+            }
+            #spinner .ring {
+                width: 56px;
+                height: 56px;
+                border: 4px solid rgba(255, 255, 255, 0.15);
+                border-top-color: rgba(255, 255, 255, 0.8);
+                border-radius: 50%;
+            }
+            #spinner .ring.spinning {
+                animation: spin 0.8s linear infinite;
+            }
+            #spinner .label {
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 16px;
+                letter-spacing: 0.04em;
+                text-align: center;
+                white-space: pre-line;
+            }
+            #spinner.error .ring {
+                border-color: rgba(255, 80, 80, 0.4);
+                border-top-color: rgba(255, 80, 80, 0.9);
+            }
+            #spinner.error .label {
+                color: rgba(255, 180, 180, 0.9);
+            }
+            @keyframes spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+        </style>
+    </head>
+
+    <body>
+        <div id="container">
+            <video id="videoPlayer" autoplay playsinline muted></video>
+            <div id="spinner">
+                <div class="ring spinning"></div>
+                <div class="label">connecting…</div>
+            </div>
+            <div id="state"></div>
+        </div>
+
+        <script>
+            (function () {
+                var WHEP_URL = "https://b.siobud.com/api/whep";
+
+                var params = new URLSearchParams(window.location.search);
+                var path = window.location.pathname.replace(/^\//, "");
+                var STREAM_KEY =
+                    params.get("stream_key") ||
+                    (path && path.indexOf(".html") === -1
+                        ? decodeURIComponent(path)
+                        : "");
+
+                var CONNECT_TIMEOUT = 15000;
+
+                var video = document.getElementById("videoPlayer");
+                var stateEl = document.getElementById("state");
+                var spinner = document.getElementById("spinner");
+                var ring = spinner.querySelector(".ring");
+                var label = spinner.querySelector(".label");
+
+                var pc = null;
+                var timeoutId = null;
+                var trackReceived = false;
+                var retryCount = 0;
+
+                function setLabel(text) {
+                    label.textContent = text;
+                }
+
+                function showError(text) {
+                    ring.classList.remove("spinning");
+                    spinner.classList.add("error");
+                    setLabel(text);
+                    spinner.style.opacity = "1";
+                    spinner.style.display = "";
+                }
+
+                function hideSpinner() {
+                    spinner.classList.remove("error");
+                    spinner.style.opacity = "0";
+                    setTimeout(function () {
+                        spinner.style.display = "none";
+                    }, 400);
+                }
+
+                function setState(text) {
+                    stateEl.textContent = text;
+                    if (text === "connected") {
+                        setTimeout(function () {
+                            stateEl.style.opacity = "0";
+                        }, 2000);
+                    } else {
+                        stateEl.style.opacity = "1";
+                    }
+                }
+
+                function clearTimeout_() {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                        timeoutId = null;
+                    }
+                }
+
+                function closePeerConnection() {
+                    clearTimeout_();
+                    if (pc) {
+                        try {
+                            pc.close();
+                        } catch (e) {
+                            /* ignore */
+                        }
+                        pc = null;
+                    }
+                }
+
+                function onConnectionFailed(reason) {
+                    if (trackReceived) return;
+                    closePeerConnection();
+                    var msg = reason || "connection failed";
+                    setState(msg);
+                    console.error(msg);
+
+                    if (retryCount < 3) {
+                        retryCount++;
+                        setLabel("retrying (" + retryCount + "/3)\u2026");
+                        ring.classList.add("spinning");
+                        spinner.classList.remove("error");
+                        setTimeout(function () {
+                            connect();
+                        }, 2000);
+                    } else {
+                        showError("connection failed\ntap to retry");
+                        spinner.onclick = function () {
+                            spinner.onclick = null;
+                            retryCount = 0;
+                            ring.classList.add("spinning");
+                            spinner.classList.remove("error");
+                            setLabel("connecting\u2026");
+                            connect();
+                        };
+                    }
+                }
+
+                function connect() {
+                    if (pc) {
+                        closePeerConnection();
+                    }
+
+                    trackReceived = false;
+                    setLabel("connecting\u2026");
+                    ring.classList.add("spinning");
+                    spinner.classList.remove("error");
+                    spinner.onclick = null;
+                    spinner.style.opacity = "1";
+                    spinner.style.display = "";
+                    setState("");
+
+                    pc = new RTCPeerConnection({
+                        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+                    });
+
+                    pc.addTransceiver("audio", { direction: "recvonly" });
+                    pc.addTransceiver("video", { direction: "recvonly" });
+
+                    pc.ontrack = function (event) {
+                        if (trackReceived) return;
+                        trackReceived = true;
+                        clearTimeout_();
+                        video.srcObject = event.streams[0];
+                        video.muted = false;
+                        hideSpinner();
+                        video.play().catch(function () {});
+                    };
+
+                    pc.onconnectionstatechange = function () {
+                        var s = pc.connectionState;
+                        if (s === "connected") {
+                            setLabel("negotiating\u2026");
+                        } else if (s === "failed" || s === "closed") {
+                            onConnectionFailed("connection " + s);
+                        }
+                    };
+
+                    pc.oniceconnectionstatechange = function () {
+                        var s = pc.iceConnectionState;
+                        if (s === "connected" || s === "completed") {
+                            if (!trackReceived) {
+                                setLabel("waiting for media\u2026");
+                            }
+                            setState("connected");
+                        } else if (s === "failed" || s === "disconnected") {
+                            onConnectionFailed("ice " + s);
+                        }
+                    };
+
+                    timeoutId = setTimeout(function () {
+                        onConnectionFailed("timed out");
+                    }, CONNECT_TIMEOUT);
+
+                    pc.createOffer()
+                        .then(function (offer) {
+                            return pc.setLocalDescription(offer);
+                        })
+                        .then(function () {
+                            setLabel("signaling\u2026");
+                            return fetch(WHEP_URL, {
+                                method: "POST",
+                                body: pc.localDescription.sdp,
+                                headers: {
+                                    Authorization: "Bearer " + STREAM_KEY,
+                                    "Content-Type": "application/sdp",
+                                },
+                            });
+                        })
+                        .then(function (r) {
+                            if (!r.ok) {
+                                throw new Error("HTTP " + r.status);
+                            }
+                            return r.text();
+                        })
+                        .then(function (answer) {
+                            if (!answer || answer.trim() === "") {
+                                throw new Error("empty SDP answer");
+                            }
+                            return pc.setRemoteDescription({
+                                sdp: answer,
+                                type: "answer",
+                            });
+                        })
+                        .catch(function (err) {
+                            onConnectionFailed(err.message);
+                        });
+                }
+
+                /* ---------- fullscreen toggle ---------- */
+                function toggleFullscreen() {
+                    var el = document.getElementById("container");
+                    if (document.fullscreenElement) {
+                        document.exitFullscreen();
+                    } else if (el.requestFullscreen) {
+                        el.requestFullscreen();
+                    } else if (el.webkitRequestFullscreen) {
+                        el.webkitRequestFullscreen();
+                    }
+                }
+
+                video.addEventListener("click", toggleFullscreen);
+
+                /* ---------- start ---------- */
+                connect();
+            })();
+        </script>
+    </body>
+</html>
