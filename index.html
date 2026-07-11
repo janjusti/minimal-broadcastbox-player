@@ -123,7 +123,6 @@
                 var pc = null;
                 var timeoutId = null;
                 var disconnectTimeoutId = null;
-                var statsWatchdogId = null;
                 var trackReceived = false;
                 var retryCount = 0;
                 var isReconnecting = false;
@@ -168,48 +167,6 @@
                         clearTimeout(disconnectTimeoutId);
                         disconnectTimeoutId = null;
                     }
-                    if (statsWatchdogId) {
-                        clearInterval(statsWatchdogId);
-                        statsWatchdogId = null;
-                    }
-                }
-
-                function startStatsWatchdog() {
-                    if (statsWatchdogId) return;
-                    var lastBytes = 0;
-                    var stallCount = 0;
-                    statsWatchdogId = setInterval(function () {
-                        if (!pc || !trackReceived) return;
-                        pc.getStats(null)
-                            .then(function (stats) {
-                                var bytes = 0;
-                                stats.forEach(function (r) {
-                                    if (
-                                        r.type === "inbound-rtp" &&
-                                        (r.kind === "video" ||
-                                            r.kind === "audio")
-                                    ) {
-                                        bytes += r.bytesReceived || 0;
-                                    }
-                                });
-                                if (bytes > 0 && bytes === lastBytes) {
-                                    stallCount++;
-                                    if (stallCount >= 3) {
-                                        clearInterval(statsWatchdogId);
-                                        statsWatchdogId = null;
-                                        onConnectionFailed(
-                                            "no data received"
-                                        );
-                                    }
-                                } else {
-                                    stallCount = 0;
-                                }
-                                lastBytes = bytes;
-                            })
-                            .catch(function () {
-                                /* stats fail silently */
-                            });
-                    }, 1000);
                 }
 
                 function closePeerConnection() {
@@ -318,8 +275,6 @@
                                 }
                             };
                         }
-
-                        startStatsWatchdog();
                     };
 
                     pc.onconnectionstatechange = function () {
@@ -432,6 +387,28 @@
                 }
 
                 video.addEventListener("click", toggleFullscreen);
+
+                /* reconnect when network comes back */
+                window.addEventListener("online", function () {
+                    if (trackReceived && !isReconnecting) {
+                        retryCount = 0;
+                        onConnectionFailed("network restored");
+                    }
+                });
+
+                /* reconnect on connection type change (e.g. wifi to 4g) */
+                var conn =
+                    navigator.connection ||
+                    navigator.mozConnection ||
+                    navigator.webkitConnection;
+                if (conn) {
+                    conn.addEventListener("change", function () {
+                        if (trackReceived && !isReconnecting) {
+                            retryCount = 0;
+                            onConnectionFailed("network changed");
+                        }
+                    });
+                }
 
                 /* ---------- start ---------- */
                 connect();
