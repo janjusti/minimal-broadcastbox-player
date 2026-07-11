@@ -111,6 +111,7 @@
                     (path && path.indexOf(".html") === -1
                         ? decodeURIComponent(path)
                         : "");
+                var DEBUG = params.has("debug");
 
                 var CONNECT_TIMEOUT = 15000;
 
@@ -126,6 +127,17 @@
                 var trackReceived = false;
                 var retryCount = 0;
                 var isReconnecting = false;
+                var connectedAt = 0;
+
+                /* shared state for debug module */
+                window.__state = {
+                    get pc() { return pc; },
+                    get trackReceived() { return trackReceived; },
+                    get isReconnecting() { return isReconnecting; },
+                    get retryCount() { return retryCount; },
+                    connectedAt: 0,
+                    streamKey: STREAM_KEY,
+                };
 
                 function setLabel(text) {
                     label.textContent = text;
@@ -148,12 +160,23 @@
                 }
 
                 function setState(text) {
-                    stateEl.textContent = text;
                     if (text === "connected") {
+                        connectedAt = Date.now();
+                        window.__state.connectedAt = connectedAt;
+                        if (window.__debug) window.__debug.resetSession();
+                        var key = STREAM_KEY;
+                        if (key.length > 20) {
+                            key = key.substring(0, 18) + "\u2026";
+                        }
+                        text = "connected  \u2014  " + key;
+                        stateEl.textContent = text;
                         setTimeout(function () {
                             stateEl.style.opacity = "0";
                         }, 2000);
                     } else {
+                        connectedAt = 0;
+                        window.__state.connectedAt = 0;
+                        stateEl.textContent = text;
                         stateEl.style.opacity = "1";
                     }
                 }
@@ -411,6 +434,15 @@
                 }
 
                 /* ---------- start ---------- */
+                if (DEBUG) {
+                    var link = document.createElement("link");
+                    link.rel = "stylesheet";
+                    link.href = "debug.css";
+                    document.head.appendChild(link);
+                    var script = document.createElement("script");
+                    script.src = "debug.js";
+                    document.head.appendChild(script);
+                }
                 connect();
             })();
         </script>

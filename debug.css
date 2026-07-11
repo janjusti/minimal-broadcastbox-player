@@ -1,0 +1,30 @@
+#debug {
+    display: none;
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.65);
+    color: rgba(255, 255, 255, 0.8);
+    font: 12px monospace;
+    padding: 8px 10px;
+    border-radius: 6px;
+    line-height: 1.5;
+    pointer-events: none;
+    z-index: 10;
+    max-width: 320px;
+    max-height: 50vh;
+    overflow: hidden;
+}
+#debug table {
+    border-collapse: collapse;
+}
+#debug td {
+    padding: 0 6px 0 0;
+    vertical-align: top;
+}
+#debug td:first-child {
+    color: rgba(255, 255, 255, 0.5);
+}
+#debug td.sep {
+    padding-top: 6px;
+}
