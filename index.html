@@ -438,10 +438,12 @@
                     var link = document.createElement("link");
                     link.rel = "stylesheet";
                     link.href = "debug.css";
+                    link.onload = function () {
+                        var script = document.createElement("script");
+                        script.src = "debug.js";
+                        document.head.appendChild(script);
+                    };
                     document.head.appendChild(link);
-                    var script = document.createElement("script");
-                    script.src = "debug.js";
-                    document.head.appendChild(script);
                 }
                 connect();
             })();

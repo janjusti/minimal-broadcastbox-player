@@ -225,13 +225,12 @@
         el.innerHTML = html;
         el.style.display = "block";
 
-        var maxH = window.innerHeight * 0.5;
-        var size = 12;
+        /* fit font so panel stays within 50vh */
+        var pad = 16;
+        var maxH = window.innerHeight * 0.5 - pad;
+        var size = Math.min(12, Math.floor(maxH / (rows.length * 1.5)));
+        if (size < 7) size = 7;
         el.style.fontSize = size + "px";
-        while (el.scrollHeight > maxH && size > 7) {
-            size--;
-            el.style.fontSize = size + "px";
-        }
     }
 
     function resetSession() {
