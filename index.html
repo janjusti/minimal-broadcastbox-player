@@ -122,8 +122,11 @@
 
                 var pc = null;
                 var timeoutId = null;
+                var disconnectTimeoutId = null;
+                var statsWatchdogId = null;
                 var trackReceived = false;
                 var retryCount = 0;
+                var isReconnecting = false;
 
                 function setLabel(text) {
                     label.textContent = text;
@@ -161,6 +164,52 @@
                         clearTimeout(timeoutId);
                         timeoutId = null;
                     }
+                    if (disconnectTimeoutId) {
+                        clearTimeout(disconnectTimeoutId);
+                        disconnectTimeoutId = null;
+                    }
+                    if (statsWatchdogId) {
+                        clearInterval(statsWatchdogId);
+                        statsWatchdogId = null;
+                    }
+                }
+
+                function startStatsWatchdog() {
+                    if (statsWatchdogId) return;
+                    var lastBytes = 0;
+                    var stallCount = 0;
+                    statsWatchdogId = setInterval(function () {
+                        if (!pc || !trackReceived) return;
+                        pc.getStats(null)
+                            .then(function (stats) {
+                                var bytes = 0;
+                                stats.forEach(function (r) {
+                                    if (
+                                        r.type === "inbound-rtp" &&
+                                        (r.kind === "video" ||
+                                            r.kind === "audio")
+                                    ) {
+                                        bytes += r.bytesReceived || 0;
+                                    }
+                                });
+                                if (bytes > 0 && bytes === lastBytes) {
+                                    stallCount++;
+                                    if (stallCount >= 3) {
+                                        clearInterval(statsWatchdogId);
+                                        statsWatchdogId = null;
+                                        onConnectionFailed(
+                                            "no data received"
+                                        );
+                                    }
+                                } else {
+                                    stallCount = 0;
+                                }
+                                lastBytes = bytes;
+                            })
+                            .catch(function () {
+                                /* stats fail silently */
+                            });
+                    }, 1000);
                 }
 
                 function closePeerConnection() {
@@ -176,30 +225,49 @@
                 }
 
                 function onConnectionFailed(reason) {
-                    if (trackReceived) return;
                     closePeerConnection();
                     var msg = reason || "connection failed";
-                    setState(msg);
                     console.error(msg);
 
-                    if (retryCount < 3) {
-                        retryCount++;
-                        setLabel("retrying (" + retryCount + "/3)\u2026");
-                        ring.classList.add("spinning");
-                        spinner.classList.remove("error");
-                        setTimeout(function () {
-                            connect();
-                        }, 2000);
-                    } else {
-                        showError("connection failed\ntap to retry");
-                        spinner.onclick = function () {
-                            spinner.onclick = null;
-                            retryCount = 0;
+                    if (!trackReceived) {
+                        /* initial connection failed — limited retries */
+                        setState(msg);
+                        if (retryCount < 3) {
+                            retryCount++;
+                            setLabel("retrying (" + retryCount + "/3)\u2026");
                             ring.classList.add("spinning");
                             spinner.classList.remove("error");
-                            setLabel("connecting\u2026");
+                            spinner.style.opacity = "1";
+                            spinner.style.display = "";
+                            setTimeout(function () {
+                                connect();
+                            }, 2000);
+                        } else {
+                            showError("connection failed\ntap to retry");
+                            spinner.onclick = function () {
+                                spinner.onclick = null;
+                                retryCount = 0;
+                                ring.classList.add("spinning");
+                                spinner.classList.remove("error");
+                                setLabel("connecting\u2026");
+                                connect();
+                            };
+                        }
+                    } else {
+                        /* mid-stream drop — unlimited reconnect with backoff */
+                        if (isReconnecting) return;
+                        isReconnecting = true;
+                        setState("reconnecting");
+                        setLabel("reconnecting\u2026");
+                        ring.classList.add("spinning");
+                        spinner.classList.remove("error");
+                        spinner.style.opacity = "1";
+                        spinner.style.display = "";
+                        var delay = Math.min(2000 * Math.pow(2, retryCount), 8000);
+                        retryCount++;
+                        setTimeout(function () {
                             connect();
-                        };
+                        }, delay);
                     }
                 }
 
@@ -231,9 +299,31 @@
                         video.srcObject = event.streams[0];
                         hideSpinner();
                         video.play().catch(function () {});
+
+                        /* native mute detection */
+                        var muteTimeoutId = null;
+                        var tracks = event.streams[0].getTracks();
+                        for (var i = 0; i < tracks.length; i++) {
+                            tracks[i].onmute = function () {
+                                if (!trackReceived || muteTimeoutId) return;
+                                muteTimeoutId = setTimeout(function () {
+                                    muteTimeoutId = null;
+                                    onConnectionFailed("track muted");
+                                }, 2000);
+                            };
+                            tracks[i].onunmute = function () {
+                                if (muteTimeoutId) {
+                                    clearTimeout(muteTimeoutId);
+                                    muteTimeoutId = null;
+                                }
+                            };
+                        }
+
+                        startStatsWatchdog();
                     };
 
                     pc.onconnectionstatechange = function () {
+                        if (!pc) return;
                         var s = pc.connectionState;
                         if (s === "connected") {
                             setLabel("negotiating\u2026");
@@ -243,13 +333,44 @@
                     };
 
                     pc.oniceconnectionstatechange = function () {
+                        if (!pc) return;
                         var s = pc.iceConnectionState;
                         if (s === "connected" || s === "completed") {
+                            if (disconnectTimeoutId) {
+                                clearTimeout(disconnectTimeoutId);
+                                disconnectTimeoutId = null;
+                                /* recovered from disconnect */
+                                if (trackReceived) {
+                                    hideSpinner();
+                                }
+                            }
+                            isReconnecting = false;
+                            retryCount = 0;
                             if (!trackReceived) {
                                 setLabel("waiting for media\u2026");
                             }
                             setState("connected");
-                        } else if (s === "failed" || s === "disconnected") {
+                        } else if (s === "disconnected") {
+                            /* browser may recover on its own — wait before failing */
+                            if (!disconnectTimeoutId) {
+                                if (trackReceived) {
+                                    setLabel("reconnecting\u2026");
+                                    ring.classList.add("spinning");
+                                    spinner.classList.remove("error");
+                                    spinner.style.opacity = "1";
+                                    spinner.style.display = "";
+                                }
+                                setState("reconnecting");
+                                disconnectTimeoutId = setTimeout(function () {
+                                    disconnectTimeoutId = null;
+                                    onConnectionFailed("ice " + s);
+                                }, 8000);
+                            }
+                        } else if (s === "failed") {
+                            if (disconnectTimeoutId) {
+                                clearTimeout(disconnectTimeoutId);
+                                disconnectTimeoutId = null;
+                            }
                             onConnectionFailed("ice " + s);
                         }
                     };
